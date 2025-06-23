@@ -10,14 +10,14 @@ terraform {
 }
 
 provider "aws" {
-  region = "us-east-2" # Change as needed
+  region = "ap-south-1" # Change as needed
 }
 
 variable "vpc_cidr"    { default = "10.0.0.0/16" }
 variable "db_username" { default = "admin" }
 variable "db_password" { default = "MySecurePass123" }
 variable "db_name"     { default = "inventory" }
-variable "azs"         { default = ["us-east-2a", "us-east-2b"] }
+variable "azs"         { default = ["ap-south-1a", "ap-south-1b"] }
 
 locals {
   public_subnets  = ["10.0.0.0/20", "10.0.48.0/20"]
