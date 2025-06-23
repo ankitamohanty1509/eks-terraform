@@ -206,7 +206,7 @@ resource "aws_iam_role_policy_attachment" "ssm_policy" {
 
 # EKS Cluster
 resource "aws_eks_cluster" "main" {
-  name     = "MyEKSCluster"
+  name     = "eks-terraform-cluster"
   role_arn = aws_iam_role.eks_cluster_role.arn
 
   vpc_config {
