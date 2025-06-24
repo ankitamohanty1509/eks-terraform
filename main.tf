@@ -1,4 +1,3 @@
-
 terraform {
   required_providers {
     aws = {
@@ -10,7 +9,7 @@ terraform {
 }
 
 provider "aws" {
-  region = "ap-south-1" # Change as needed
+  region = "ap-south-1"
 }
 
 variable "vpc_cidr"    { default = "10.0.0.0/16" }
@@ -32,20 +31,18 @@ resource "aws_vpc" "main" {
   tags = { Name = "east2-vpc" }
 }
 
-# IGW
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
-  tags = { Name = "east2-igw" }
+  tags   = { Name = "east2-igw" }
 }
 
-# Subnets
 resource "aws_subnet" "public" {
   count                   = 2
   vpc_id                  = aws_vpc.main.id
   cidr_block              = local.public_subnets[count.index]
   map_public_ip_on_launch = true
   availability_zone       = var.azs[count.index]
-  tags = { Name = "public-subnet-${count.index + 1}" }
+  tags                    = { Name = "public-subnet-${count.index + 1}" }
 }
 
 resource "aws_subnet" "private" {
@@ -54,17 +51,17 @@ resource "aws_subnet" "private" {
   cidr_block              = local.private_subnets[count.index]
   map_public_ip_on_launch = false
   availability_zone       = element(var.azs, count.index % 2)
-  tags = { Name = "private-subnet-${count.index + 1}" }
+  tags                    = { Name = "private-subnet-${count.index + 1}" }
 }
 
-# Route Tables
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.main.id
-  tags = { Name = "public-rt" }
+  tags   = { Name = "public-rt" }
 }
+
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  tags = { Name = "private-rt" }
+  tags   = { Name = "private-rt" }
 }
 
 resource "aws_route" "public_internet" {
@@ -75,12 +72,13 @@ resource "aws_route" "public_internet" {
 
 resource "aws_eip" "nat" {
   domain = "vpc"
-  tags = { Name = "nat-eip" }
+  tags   = { Name = "nat-eip" }
 }
+
 resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat.id
   subnet_id     = aws_subnet.public[0].id
-  tags = { Name = "nat-gateway" }
+  tags          = { Name = "nat-gateway" }
 }
 
 resource "aws_route" "private_nat" {
@@ -94,17 +92,18 @@ resource "aws_route_table_association" "public" {
   subnet_id      = aws_subnet.public[count.index].id
   route_table_id = aws_route_table.public.id
 }
+
 resource "aws_route_table_association" "private" {
   count          = 4
   subnet_id      = aws_subnet.private[count.index].id
   route_table_id = aws_route_table.private.id
 }
 
-# RDS Security Group
+# Security Group for RDS
 resource "aws_security_group" "db" {
   name        = "rds-db-sg"
   vpc_id      = aws_vpc.main.id
-  description = "Allow mysql from anywhere (restrict for prod)"
+  description = "Allow MySQL from anywhere (adjust for prod)"
   ingress {
     from_port   = 5432
     to_port     = 5432
@@ -120,14 +119,14 @@ resource "aws_security_group" "db" {
   tags = { Name = "rds-db-sg" }
 }
 
-# DB Subnet Group - use two private subnets in different AZs!
+# RDS Subnet Group
 resource "aws_db_subnet_group" "main" {
   name       = "my-db-subnet-group"
   subnet_ids = [aws_subnet.private[0].id, aws_subnet.private[1].id]
-  tags = { Name = "my-db-subnet-group" }
+  tags       = { Name = "my-db-subnet-group" }
 }
 
-# RDS mysql 17.4
+# RDS Instance
 resource "aws_db_instance" "mysql" {
   identifier              = "mysqldatabase"
   allocated_storage       = 20
@@ -142,7 +141,7 @@ resource "aws_db_instance" "mysql" {
   publicly_accessible     = true
   multi_az                = true
   skip_final_snapshot     = true
-  tags = { Name = "my-mysql-db" }
+  tags                    = { Name = "my-mysql-db" }
 }
 
 # IAM Roles for EKS
@@ -155,97 +154,18 @@ data "aws_iam_policy_document" "eks_assume_role" {
     }
   }
 }
+
 resource "aws_iam_role" "eks_cluster_role" {
-  name               = "EKSClusterRole-v2"  # changed to avoid conflict
+  name               = "EKSClusterRole-v2"
   assume_role_policy = data.aws_iam_policy_document.eks_assume_role.json
-  tags = { Name = "eks-cluster-role" }
+  tags               = { Name = "eks-cluster-role" }
 }
+
 resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
   role       = aws_iam_role.eks_cluster_role.name
   policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
+
 resource "aws_iam_role_policy_attachment" "eks_vpc_resource_controller" {
   role       = aws_iam_role.eks_cluster_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
-}
-
-data "aws_iam_policy_document" "node_assume_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["ec2.amazonaws.com"]
-    }
-  }
-}
-resource "aws_iam_role" "eks_node_role" {
-  name               = "EKSNodeGroupRole-v2"  # changed to avoid conflict
-  assume_role_policy = data.aws_iam_policy_document.node_assume_role.json
-  tags = { Name = "eks-nodegroup-role" }
-}
-resource "aws_iam_role_policy_attachment" "worker_node_policy" {
-  role       = aws_iam_role.eks_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-}
-resource "aws_iam_role_policy_attachment" "cni_policy" {
-  role       = aws_iam_role.eks_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-}
-resource "aws_iam_role_policy_attachment" "ecr_read_policy" {
-  role       = aws_iam_role.eks_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-}
-resource "aws_iam_role_policy_attachment" "ecr_pull_policy" {
-  role       = aws_iam_role.eks_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryPullOnly"
-}
-resource "aws_iam_role_policy_attachment" "ssm_policy" {
-  role       = aws_iam_role.eks_node_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-# EKS Cluster
-resource "aws_eks_cluster" "main" {
-  name     = "eks-terraform-cluster"
-  role_arn = aws_iam_role.eks_cluster_role.arn
-
-  vpc_config {
-    subnet_ids = concat([for s in aws_subnet.public : s.id], [for s in aws_subnet.private : s.id])
-  }
-
-  depends_on = [
-    aws_iam_role.eks_cluster_role,
-    aws_iam_role_policy_attachment.eks_cluster_policy,
-    aws_iam_role_policy_attachment.eks_vpc_resource_controller,
-  ]
-  tags = { Name = "eks-cluster" }
-}
-
-# EKS Node Group
-resource "aws_eks_node_group" "main" {
-  cluster_name    = aws_eks_cluster.main.name
-  node_group_name = "default"
-  node_role_arn   = aws_iam_role.eks_node_role.arn
-  subnet_ids      = concat([for s in aws_subnet.public : s.id], [for s in aws_subnet.private : s.id])
-  scaling_config {
-    desired_size = 2
-    max_size     = 3
-    min_size     = 1
-  }
-  instance_types = ["t3.medium"]
-  tags = { Name = "eks-nodegroup" }
-  depends_on = [
-    aws_eks_cluster.main,
-    aws_iam_role.eks_node_role,
-    aws_iam_role_policy_attachment.worker_node_policy,
-    aws_iam_role_policy_attachment.cni_policy,
-    aws_iam_role_policy_attachment.ecr_read_policy,
-    aws_iam_role_policy_attachment.ecr_pull_policy,
-    aws_iam_role_policy_attachment.ssm_policy,
-  ]
-}
-
-output "rds_endpoint" {
-  description = "RDS mysql endpoint"
-  value       = aws_db_instance.mysql.endpoint
-}
+  policy_arn = "arn_
