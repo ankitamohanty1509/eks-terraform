@@ -23,7 +23,6 @@ locals {
   private_subnets = ["10.0.16.0/20", "10.0.32.0/20", "10.0.64.0/20", "10.0.80.0/20"]
 }
 
-# VPC
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -99,11 +98,10 @@ resource "aws_route_table_association" "private" {
   route_table_id = aws_route_table.private.id
 }
 
-# Security Group for RDS
 resource "aws_security_group" "db" {
   name        = "rds-db-sg"
   vpc_id      = aws_vpc.main.id
-  description = "Allow MySQL from anywhere (adjust for prod)"
+  description = "Allow MySQL from anywhere"
   ingress {
     from_port   = 5432
     to_port     = 5432
@@ -119,14 +117,12 @@ resource "aws_security_group" "db" {
   tags = { Name = "rds-db-sg" }
 }
 
-# RDS Subnet Group
 resource "aws_db_subnet_group" "main" {
   name       = "my-db-subnet-group"
   subnet_ids = [aws_subnet.private[0].id, aws_subnet.private[1].id]
   tags       = { Name = "my-db-subnet-group" }
 }
 
-# RDS Instance
 resource "aws_db_instance" "mysql" {
   identifier              = "mysqldatabase"
   allocated_storage       = 20
@@ -144,7 +140,6 @@ resource "aws_db_instance" "mysql" {
   tags                    = { Name = "my-mysql-db" }
 }
 
-# IAM Roles for EKS
 data "aws_iam_policy_document" "eks_assume_role" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -168,4 +163,105 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
 
 resource "aws_iam_role_policy_attachment" "eks_vpc_resource_controller" {
   role       = aws_iam_role.eks_cluster_role.name
-  policy_arn = "arn_
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSVPCResourceController"
+}
+
+data "aws_iam_policy_document" "node_assume_role" {
+  statement {
+    actions = ["sts:AssumeRole"]
+    principals {
+      type        = "Service"
+      identifiers = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "eks_node_role" {
+  name               = "EKSNodeGroupRole-v2"
+  assume_role_policy = data.aws_iam_policy_document.node_assume_role.json
+  tags               = { Name = "eks-nodegroup-role" }
+}
+
+resource "aws_iam_role_policy_attachment" "worker_node_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
+
+resource "aws_iam_role_policy_attachment" "cni_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+}
+
+resource "aws_iam_role_policy_attachment" "ecr_read_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+}
+
+resource "aws_iam_role_policy_attachment" "ssm_policy" {
+  role       = aws_iam_role.eks_node_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+resource "aws_eks_cluster" "main" {
+  name     = "eks-cluster-ankita"
+  role_arn = aws_iam_role.eks_cluster_role.arn
+
+  vpc_config {
+    subnet_ids = concat([for s in aws_subnet.public : s.id], [for s in aws_subnet.private : s.id])
+  }
+
+  depends_on = [
+    aws_iam_role.eks_cluster_role,
+    aws_iam_role_policy_attachment.eks_cluster_policy,
+    aws_iam_role_policy_attachment.eks_vpc_resource_controller,
+  ]
+
+  tags = {
+    Name = "eks-cluster-ankita"
+  }
+}
+
+resource "aws_eks_node_group" "main" {
+  cluster_name    = aws_eks_cluster.main.name
+  node_group_name = "default"
+  node_role_arn   = aws_iam_role.eks_node_role.arn
+  subnet_ids      = concat([for s in aws_subnet.public : s.id], [for s in aws_subnet.private : s.id])
+
+  scaling_config {
+    desired_size = 2
+    max_size     = 3
+    min_size     = 1
+  }
+
+  instance_types = ["t3.medium"]
+
+  tags = {
+    Name = "eks-nodegroup"
+  }
+
+  depends_on = [
+    aws_eks_cluster.main,
+    aws_iam_role.eks_node_role,
+    aws_iam_role_policy_attachment.worker_node_policy,
+    aws_iam_role_policy_attachment.cni_policy,
+    aws_iam_role_policy_attachment.ecr_read_policy,
+    aws_iam_role_policy_attachment.ssm_policy,
+  ]
+}
+
+resource "null_resource" "aws_auth_patch" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      aws eks update-kubeconfig --region ap-south-1 --name eks-cluster-ankita
+      kubectl get configmap aws-auth -n kube-system -o yaml > aws-auth.yaml
+      yq eval '.data.mapUsers += "\n  - userarn: arn:aws:iam::605134461257:user/ankita\n    username: ankita\n    groups:\n      - system:masters"' -i aws-auth.yaml
+      kubectl apply -f aws-auth.yaml
+    EOT
+    interpreter = ["/bin/bash", "-c"]
+  }
+
+  depends_on = [
+    aws_eks_cluster.main,
+    aws_eks_node_group.main
+  ]
+}
