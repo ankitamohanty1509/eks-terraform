@@ -99,9 +99,9 @@ resource "aws_route_table_association" "private" {
 }
 
 resource "aws_security_group" "db" {
-  name        = "rds-db-sg"
-  vpc_id      = aws_vpc.main.id
-  description = "Allow MySQL from anywhere"
+  name_prefix  = "rds-db-sg-"
+  vpc_id       = aws_vpc.main.id
+  description  = "Allow MySQL from anywhere"
   ingress {
     from_port   = 5432
     to_port     = 5432
